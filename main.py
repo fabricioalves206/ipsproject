@@ -12,75 +12,44 @@ from matplotlib.backends.backend_tkagg import (
     NavigationToolbar2Tk)
 
 
-port = '/dev/ttyACM0'
-baudrate = 9600
-
-try:
-    ser = serial.Serial(port, baudrate, bytesize=8, parity='N', stopbits=1, timeout=None, rtscts=False,
-                        dsrdtr=False)
-    print("serial port " + ser.name + " opened")
-except Exception:
-    print("error open serial port: " + port)
-    exit()
-
-ser.read_all()
-ser.flushOutput()
-ser.flushInput()
-ser.flush()
-
-while ser.inWaiting()>0:
-    pass
-#information come from a button
-read = True
-
-#les donnes vont être ecrites ici pendant le temps que la thread est activate
-data = ()
-type_data = ""
-plot_data = []
-buffer_size = 1000
-x = []
-y = []
-
-
-def serveOn():
-    ser.write('serveOn')  # write a string
-
-
-def serveOff():
-    ser.write('serveOff')  # write a string
+# cleaning buffer
+def clearBuffer():
+    ser.read_all()
+    ser.flushOutput()
+    ser.flushInput()
+    ser.flush()
 
 
 def onPushSend():
-    global read
-    var = strToSend.get()
-    read = False
-    if var == 'parar':
-        ui.title("stopped")
     try:
-        command = var.split("=", 1)
-        print(var)
+        # read the command line and get which value and function
+        line = strToSend.get()
+        command = line.split("=", 1)
         value = command[1]
-        comando = command[0]
-        if comando == 'gain':
-            msg = "$" + "G" + value + "#"
-            print(msg)
-            print("sending msg...")
+        func = command[0]
+        match func:
+            case 'gain':
+                msg = "$" + "G" + value + "#"
+            case 'pi':
+                msg = "$" + "P" + value + "#"
+            case _:
+                print("command doesnt exist")
+                return
 
-            time.sleep(0.5)
+        # send the command
+        for i in range (0,3):
             ser.write(msg.encode())
-            time.sleep(0.4)
-            read = True
-            ser.flushOutput()
             print("msg sent !")
-        if comando == 'pi':
-            msg = "$" + "P" + value + "#"
-            ser.write(msg.encode())
+
+        # format command line
         sendButton.text = ""
         labelCommandSent.config(fg="blue")
         time.sleep(0.005)
         labelCommandSent.config(fg=ui.cget('bg'))
+
     except Exception:
         print("Command not sent")
+
 
 def receive():
     if data[0] == b'P':
@@ -99,12 +68,15 @@ def update_plot():
     except Exception:
         data_float = 0.0
     plot_data.append(data_float)
+
+# removing old data from the graphic
     if len(plot_data) > buffer_size:
       plot_data.pop(0)
     ax.plot(plot_data, markevery=50)
     figure_canvas.draw()
     ui.after(100, update_plot)
 
+# other way to plot data
 '''
     x.append(time.time())
     y.append(int(data_float))
@@ -116,19 +88,12 @@ def update_plot():
 '''
 
 
-def stopreading():
-    global read
-    read = False
-
-
 def serialevent():
-    global ser, read, data, type_data
+    global data, type_data, ser
     mesure = []
-    ser.flushOutput()
-    ser.flushInput()
-    ser.read_all()
+    clearBuffer()
     while True:
-        while read is True:
+        while not stop_reading.is_set():
             while ser.inWaiting() == 0:
                 data = ("NDA", 'NDA')
             data_byte = ser.read(1)
@@ -136,7 +101,6 @@ def serialevent():
                 type_data = ser.read(1)
                 while data_byte != b'#':
                     data_byte = ser.read(1)
-                    print(data_byte)
                     data_str = data_byte.decode('utf-8').rstrip('\r\n')
                     if data_str.isdigit():
                         mesure.append(data_str)
@@ -144,15 +108,36 @@ def serialevent():
                 mesure.clear()
                 time.sleep(0.005)
         ui.title("IHM - Stopped")
-    return
 
+# initializing communication
+port = '/dev/ttyACM0'
+baudrate = 115200
+
+try:
+    ser = serial.Serial(port, baudrate, bytesize=8, parity='N', stopbits=1, timeout=None, rtscts=False,
+                        dsrdtr=False)
+    print("serial port " + ser.name + " opened")
+except Exception:
+    print("error open serial port: " + port)
+    exit()
+
+# making sure there is no data
+while ser.inWaiting() > 0:
+   pass
+
+# variable to stop reading when we want to send command
+stop_reading = threading.Event()
+
+# les donnes vont être ecrites ici pendant le temps que la thread est activate
+data = ()
+type_data = ""
+plot_data = []
+buffer_size = 1000
+x = []
+y = []
 
 t = threading.Thread(target=serialevent)
 t.start()
-
-
-#while t.is_alive():
-   #pass
 
 # creating IHM
 ui = Tk()
@@ -179,14 +164,6 @@ strReceivedGain = StringVar()
 receivedEntryPower = Entry(main_frame, textvariable=strReceivedPower)
 receivedEntryCurrent = Entry(main_frame, textvariable=strReceivedCurrent)
 receivedEntryGain = Entry(main_frame, textvariable=strReceivedGain)
-serveOnButton = Button(main_frame, text="SERVE ON", font=("Arial", 10, "bold"), bg="seagreen3", fg="black",
-                       bd=3, relief=RAISED, command=serveOn)
-
-serveOffButton = Button(main_frame, text="SERVE OFF", font=("Arial", 10, "bold"), bg="seagreen3", fg="black",
-                        bd=3, relief=RAISED, command=serveOff)
-
-stopRead = Button(main_frame, text="STOP READ", font=("Arial", 10, "bold"), bg="seagreen3", fg="black",
-                        bd=3, relief=RAISED, command=stopreading)
 labelCommandSent.config(fg=ui.cget('bg'))
 main_frame.pack(side="left", fill="y", padx="5px")
 labelToSendMes.pack()
@@ -199,9 +176,7 @@ labelReceivedMesCurrent.pack()
 receivedEntryCurrent.pack()
 labelReceivedMesGain.pack()
 receivedEntryGain.pack()
-serveOnButton.pack()
-serveOffButton.pack()
-stopRead.pack()
+
 
 # prepare data
 data_buffer_power = []
